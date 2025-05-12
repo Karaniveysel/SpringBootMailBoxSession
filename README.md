@@ -2,6 +2,8 @@
 
 This project is a Spring Boot application that connects to your Gmail account and allows you to manage email operations. The application provides basic email functionalities such as listing, searching, viewing, sending, and replying to emails.
 
+localhost:8080/index.html
+
 ## Features
 
 - **Email Listing**: View all emails in your Gmail inbox
