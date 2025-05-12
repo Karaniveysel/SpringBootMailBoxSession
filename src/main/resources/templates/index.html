@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Gmail API Mail Box</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        .email-list {
+            height: 500px;
+            overflow-y: auto;
+        }
+
+        .email-item {
+            cursor: pointer;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .email-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .unread {
+            font-weight: bold;
+        }
+
+        .email-content {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 2s linear infinite;
+            margin: 20px auto;
+        }
+
+        .button-loader {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top: 2px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            visibility: hidden;
+            opacity: 0;
+            transition: visibility 0s, opacity 0.3s;
+        }
+
+        .overlay.active {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .overlay-content {
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px;
+            background-color: #4CAF50;
+            color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+            display: none;
+            z-index: 1000;
+        }
+
+        .error-notification {
+            background-color: #f44336;
+        }
+
+        .attachment-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            background-color: #f9f9f9;
+        }
+
+        .attachment-item i {
+            margin-right: 8px;
+            font-size: 1.2rem;
+        }
+
+        .attachment-item .file-name {
+            flex-grow: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .attachment-preview {
+            max-width: 100%;
+            max-height: 200px;
+            margin-top: 10px;
+            border: 1px solid #ddd;
+        }
+
+        .attachment-list {
+            margin-top: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .compose-attachments {
+            margin-top: 10px;
+        }
+
+        .compose-attachment-item {
+            display: flex;
+            align-items: center;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            padding: 5px 10px;
+            margin: 5px 0;
+        }
+
+        .compose-attachment-item .remove-attachment {
+            cursor: pointer;
+            margin-left: 10px;
+            color: #dc3545;
+        }
+
+        .new-email-btn {
+            margin-bottom: 15px;
+        }
+
+        .modal-dialog.modal-lg {
+            max-width: 800px;
+        }
+    </style>
+</head>
+<body>
+<div class="container mt-4">
+    <h1>Gmail API Mail Box</h1>
+
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <div class="input-group">
+                <input type="text" id="searchInput" class="form-control" placeholder="Konu ile ara...">
+                <button class="btn btn-primary" id="searchBtn">
+                    <span id="searchBtnText">Ara</span>
+                    <span id="searchBtnLoader" class="button-loader" style="display: none;"></span>
+                </button>
+            </div>
+        </div>
+        <div class="col-md-6 text-end">
+            <button class="btn btn-success me-2" id="composeBtn">
+                <i class="bi bi-pencil-square"></i> Yeni E-posta
+            </button>
+            <button class="btn btn-secondary" id="refreshBtn">
+                <span id="refreshBtnText">Yenile</span>
+                <span id="refreshBtnLoader" class="button-loader" style="display: none;"></span>
+            </button>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">Gelen Kutusu</div>
+                <div class="card-body p-0 email-list" id="emailList">
+                    <div class="loader" id="emailListLoader"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header" id="emailHeader">E-posta Detayı</div>
+                <div class="card-body">
+                    <div id="emailDetails">
+                        <p>E-posta görüntülemek için listeden bir e-posta seçin.</p>
+                    </div>
+
+                    <div id="attachmentsContainer" style="display: none;">
+                        <hr>
+                        <h5>Ekler</h5>
+                        <div id="attachmentsList" class="attachment-list"></div>
+                    </div>
+
+                    <div id="replySection" style="display: none;">
+                        <hr>
+                        <h5>Tümünü Yanıtla</h5>
+                        <div class="mb-3">
+                            <textarea class="form-control" id="replyContent" rows="5"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="replyAttachments" class="form-label">Ekler</label>
+                            <input class="form-control" type="file" id="replyAttachments" multiple>
+                            <div id="replyAttachmentsList" class="compose-attachments"></div>
+                        </div>
+                        <button class="btn btn-primary" id="replyAllBtn">
+                            <span id="replyAllBtnText">Tümünü Yanıtla</span>
+                            <span id="replyAllBtnLoader" class="button-loader" style="display: none;"></span>
+                        </button>
+                    </div>
+
+                    <div class="loader" id="detailLoader" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Yeni E-posta Oluşturma Modal -->
+<div class="modal fade" id="composeModal" tabindex="-1" aria-labelledby="composeModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="composeModalLabel">Yeni E-posta</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Kapat"></button>
+            </div>
+            <div class="modal-body">
+                <form id="composeForm">
+                    <div class="mb-3">
+                        <label for="toInput" class="form-label">Kime</label>
+                        <input type="email" class="form-control" id="toInput" required multiple>
+                        <small class="form-text text-muted">Birden fazla alıcı için e-posta adreslerini virgülle
+                            ayırın</small>
+                    </div>
+                    <div class="mb-3">
+                        <label for="ccInput" class="form-label">CC</label>
+                        <input type="email" class="form-control" id="ccInput" multiple>
+                    </div>
+                    <div class="mb-3">
+                        <label for="subjectInput" class="form-label">Konu</label>
+                        <input type="text" class="form-control" id="subjectInput" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="contentInput" class="form-label">İçerik</label>
+                        <textarea class="form-control" id="contentInput" rows="10" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="attachmentsInput" class="form-label">Ekler</label>
+                        <input class="form-control" type="file" id="attachmentsInput" multiple>
+                        <div id="attachmentsPreview" class="compose-attachments"></div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">İptal</button>
+                <button type="button" class="btn btn-primary" id="sendEmailBtn">
+                    <span id="sendEmailBtnText">Gönder</span>
+                    <span id="sendEmailBtnLoader" class="button-loader" style="display: none;"></span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ek Önizleme Modal -->
+<div class="modal fade" id="attachmentPreviewModal" tabindex="-1" aria-labelledby="attachmentPreviewModalLabel"
+     aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="attachmentPreviewModalLabel">Ek Önizleme</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Kapat"></button>
+            </div>
+            <div class="modal-body text-center" id="attachmentPreviewContent">
+                <!-- Önizleme içeriği buraya gelecek -->
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Kapat</button>
+                <a href="#" class="btn btn-primary" id="downloadAttachmentBtn" download>İndir</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tam ekran yükleme göstergesi -->
+<div id="fullScreenLoader" class="overlay">
+    <div class="overlay-content">
+        <div class="loader"></div>
+        <p class="mt-3">İşlem gerçekleştiriliyor, lütfen bekleyin...</p>
+    </div>
+</div>
+
+<!-- Bildirim alanı -->
+<div id="notification" class="notification">
+    <span id="notificationMessage"></span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let currentEmailId = null;
+    let composeModal = null;
+    let attachmentPreviewModal = null;
+    let selectedFiles = [];
+    let replySelectedFiles = [];
+
+    // Yükleme göstergesi işlevleri
+    function showFullScreenLoader() {
+        document.getElementById('fullScreenLoader').classList.add('active');
+    }
+
+    function hideFullScreenLoader() {
+        document.getElementById('fullScreenLoader').classList.remove('active');
+    }
+
+    // Buton yükleme durumunu değiştirme
+    function setButtonLoading(buttonId, isLoading) {
+        const button = document.getElementById(buttonId);
+        if (!button) return; // Eleman yoksa işlemi atla
+
+        const buttonText = document.getElementById(buttonId + 'Text');
+        const buttonLoader = document.getElementById(buttonId + 'Loader');
+
+        if (!buttonText || !buttonLoader) return; // Gerekli alt elemanlar yoksa işlemi atla
+
+        if (isLoading) {
+            button.disabled = true;
+            buttonText.style.opacity = '0.7';
+            buttonLoader.style.display = 'inline-block';
+        } else {
+            button.disabled = false;
+            buttonText.style.opacity = '1';
+            buttonLoader.style.display = 'none';
+        }
+    }
+
+    // Bildirim gösterme fonksiyonu
+    function showNotification(message, isError = false) {
+        const notification = document.getElementById('notification');
+        const notificationMessage = document.getElementById('notificationMessage');
+
+        if (!notification || !notificationMessage) return; // Elemanlar yoksa işlemi atla
+
+        notification.className = isError ?
+            'notification error-notification' : 'notification';
+        notificationMessage.textContent = message;
+        notification.style.display = 'block';
+
+        setTimeout(() => {
+            notification.style.display = 'none';
+        }, 3000);
+    }
+
+    // E-postaları yükle - Promise döndürecek şekilde değiştirildi
+    function loadEmails() {
+        const emailList = document.getElementById('emailList');
+        const emailListLoader = document.getElementById('emailListLoader');
+
+        if (emailList && emailListLoader) {
+            emailListLoader.style.display = 'block';
+            emailList.innerHTML = '<div class="loader" id="emailListLoader"></div>';
+        }
+
+        setButtonLoading('refreshBtn', true);
+
+        return fetch('/api/emails')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('E-postalar yüklenirken bir hata oluştu');
+                }
+                return response.json();
+            })
+            .then(emails => {
+                const emailList = document.getElementById('emailList');
+                if (!emailList) return; // Eleman yoksa işlemi atla
+
+                emailList.innerHTML = '';
+
+                if (emails.length === 0) {
+                    emailList.innerHTML = '<div class="p-3">Hiç e-posta bulunamadı.</div>';
+                    return;
+                }
+
+                emails.forEach(email => {
+                    const div = document.createElement('div');
+                    div.className = `email-item ${email.read ? '' : 'unread'}`;
+                    div.innerHTML = `
+                            <div><strong>${formatEmailAddress(email.from)}</strong></div>
+                            <div>${email.subject || '(Konu yok)'}</div>
+                            <div><small>${formatDate(email.sentDate)}</small></div>
+                            ${email.attachments && email.attachments.length > 0 ?
+                        `<div><small><i class="bi bi-paperclip"></i> ${email.attachments.length} ek</small></div>` : ''}
+                        `;
+                    div.onclick = () => showEmailDetails(email.messageId);
+                    emailList.appendChild(div);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading emails:', error);
+                const emailList = document.getElementById('emailList');
+                if (emailList) {
+                    emailList.innerHTML = '<div class="p-3 text-danger">E-postalar yüklenirken hata oluştu.</div>';
+                }
+                showNotification('E-postalar yüklenirken hata oluştu: ' + error.message, true);
+            })
+            .finally(() => {
+                const emailListLoader = document.getElementById('emailListLoader');
+                if (emailListLoader) {
+                    emailListLoader.style.display = 'none';
+                }
+                setButtonLoading('refreshBtn', false);
+            });
+    }
+
+    // E-posta detaylarını göster
+    function showEmailDetails(messageId) {
+        currentEmailId = messageId;
+
+        const detailLoader = document.getElementById('detailLoader');
+        const emailDetails = document.getElementById('emailDetails');
+        const replySection = document.getElementById('replySection');
+        const attachmentsContainer = document.getElementById('attachmentsContainer');
+
+        if (detailLoader) detailLoader.style.display = 'block';
+        if (emailDetails) emailDetails.innerHTML = '';
+        if (replySection) replySection.style.display = 'none';
+        if (attachmentsContainer) attachmentsContainer.style.display = 'none';
+
+        // E-posta öğelerini tıklanamaz yap
+        const emailItems = document.querySelectorAll('.email-item');
+        emailItems.forEach(item => {
+            item.style.pointerEvents = 'none';
+            item.style.opacity = '0.7';
+        });
+
+        fetch(`/api/emails/${messageId}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('E-posta detayları yüklenirken bir hata oluştu');
+                }
+                return response.json();
+            })
+            .then(email => {
+                const emailHeader = document.getElementById('emailHeader');
+                const emailDetails = document.getElementById('emailDetails');
+
+                if (emailHeader) emailHeader.textContent = email.subject || '(Konu yok)';
+
+                if (emailDetails) {
+                    emailDetails.innerHTML = `
+                          <div><strong>Kimden:</strong> ${email.from}</div>
+                          <div><strong>Kime:</strong> ${email.to ? email.to.join(', ') : ''}</div>
+                          ${email.cc && email.cc.length > 0 ? `<div><strong>CC:</strong> ${email.cc.join(', ')}</div>` : ''}
+                          <div><strong>Tarih:</strong> ${formatDate(email.sentDate)}</div>
+                          <hr>
+                          <div class="email-content">${email.content || '(İçerik yok)'}</div>
+                      `;
+                }
+
+                // Ekleri göster (varsa)
+                if (email.attachments && email.attachments.length > 0) {
+                    const attachmentsList = document.getElementById('attachmentsList');
+                    if (attachmentsList) {
+                        attachmentsList.innerHTML = '';
+
+                        email.attachments.forEach(attachment => {
+                            const attachmentItem = document.createElement('div');
+                            attachmentItem.className = 'attachment-item';
+
+                            // Dosya tipine göre ikon belirle
+                            let iconClass = 'bi-file-earmark';
+                            if (attachment.contentType) {
+                                if (attachment.contentType.includes('image')) {
+                                    iconClass = 'bi-file-earmark-image';
+                                } else if (attachment.contentType.includes('pdf')) {
+                                    iconClass = 'bi-file-earmark-pdf';
+                                } else if (attachment.contentType.includes('word') || attachment.contentType.includes('document')) {
+                                    iconClass = 'bi-file-earmark-word';
+                                } else if (attachment.contentType.includes('excel') || attachment.contentType.includes('sheet')) {
+                                    iconClass = 'bi-file-earmark-excel';
+                                }
+                            }
+
+                            attachmentItem.innerHTML = `
+                      <i class="bi ${iconClass}"></i>
+                      <span class="file-name">${attachment.fileName}</span>
+                      <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary preview-btn" data-filename="${attachment.fileName}">
+                          <i class="bi bi-eye"></i>
+                        </button>
+                      <a href="/api/emails/${messageId}/attachments/${attachment.fileName}" class="btn btn-outline-primary" download="${attachment.fileName}">
+                        <i class="bi bi-download"></i>
+                      </a>
+                      </div>
+                    `;
+
+                            attachmentsList.appendChild(attachmentItem);
+
+                            // Önizleme butonuna tıklama olayı ekle
+                            const previewBtn = attachmentItem.querySelector('.preview-btn');
+                            previewBtn.addEventListener('click', () => {
+                                previewAttachment(messageId, attachment);
+                            });
+                        });
+                    }
+
+                    const attachmentsContainer = document.getElementById('attachmentsContainer');
+                    if (attachmentsContainer) {
+                        attachmentsContainer.style.display = 'block';
+                    }
+                }
+
+                const replySection = document.getElementById('replySection');
+                const replyContent = document.getElementById('replyContent');
+                const replyAttachmentsList = document.getElementById('replyAttachmentsList');
+
+                if (replySection) replySection.style.display = 'block';
+                if (replyContent) replyContent.value = '';
+                if (replyAttachmentsList) replyAttachmentsList.innerHTML = '';
+
+                replySelectedFiles = [];
+
+                // Mesaj listesinde okundu olarak işaretle
+                emailItems.forEach(item => {
+                    if (item.onclick && item.onclick.toString().includes(messageId)) {
+                        item.classList.remove('unread');
+                    }
+                });
+            })
+            .catch(error => {
+                console.error('Error showing email details:', error);
+                const emailDetails = document.getElementById('emailDetails');
+                if (emailDetails) {
+                    emailDetails.innerHTML = '<div class="text-danger">E-posta detayları yüklenirken hata oluştu.</div>';
+                }
+                showNotification('E-posta detayları yüklenirken hata oluştu: ' + error.message, true);
+            })
+            .finally(() => {
+                const detailLoader = document.getElementById('detailLoader');
+                if (detailLoader) {
+                    detailLoader.style.display = 'none';
+                }
+
+                // E-posta öğelerini tekrar tıklanabilir yap
+                emailItems.forEach(item => {
+                    item.style.pointerEvents = 'auto';
+                    item.style.opacity = '1';
+                });
+            });
+    }
+
+    // Ek önizleme fonksiyonu
+    function previewAttachment(messageId, attachment) {
+        const previewContent = document.getElementById('attachmentPreviewContent');
+        const attachmentPreviewModalLabel = document.getElementById('attachmentPreviewModalLabel');
+        const downloadAttachmentBtn = document.getElementById('downloadAttachmentBtn');
+
+        if (!previewContent || !attachmentPreviewModalLabel || !downloadAttachmentBtn || !attachmentPreviewModal) {
+            return;
+        }
+
+        previewContent.innerHTML = '<div class="loader"></div>';
+
+        attachmentPreviewModalLabel.textContent = attachment.fileName;
+        downloadAttachmentBtn.href = `/api/emails/${messageId}/attachments/${attachment.fileName}`;
+
+        attachmentPreviewModal.show();
+
+        // Dosya tipine göre önizleme göster
+        if (attachment.contentType && attachment.contentType.includes('image')) {
+            const img = document.createElement('img');
+            img.className = 'img-fluid attachment-preview';
+            img.src = `/api/emails/${messageId}/attachments/${attachment.fileName}`;
+            img.alt = attachment.fileName;
+
+            img.onload = () => {
+                previewContent.innerHTML = '';
+                previewContent.appendChild(img);
+            };
+
+            img.onerror = () => {
+                previewContent.innerHTML = '<div class="alert alert-warning">Resim önizlemesi yüklenemedi.</div>';
+            };
+        } else if (attachment.contentType && attachment.contentType.includes('pdf')) {
+            previewContent.innerHTML = `
+        <div class="ratio ratio-16x9">
+          <iframe src="/api/emails/${messageId}/attachments/${attachment.fileName}" allowfullscreen></iframe>
+        </div>
+      `;
+        } else {
+            previewContent.innerHTML = `
+        <div class="alert alert-info">
+          <i class="bi bi-info-circle me-2"></i>
+          Bu dosya türü için önizleme kullanılamıyor. Dosyayı indirmek için "İndir" butonunu kullanabilirsiniz.
+        </div>
+      `;
+        }
+    }
+
+    // Konu ile arama
+    document.getElementById('searchBtn')?.addEventListener('click', () => {
+        const searchInput = document.getElementById('searchInput');
+        const searchTerm = searchInput?.value.trim();
+
+        if (!searchTerm) return;
+
+        const emailList = document.getElementById('emailList');
+        const emailListLoader = document.getElementById('emailListLoader');
+
+        if (emailList && emailListLoader) {
+            emailListLoader.style.display = 'block';
+            emailList.innerHTML = '<div class="loader" id="emailListLoader"></div>';
+        }
+
+        setButtonLoading('searchBtn', true);
+
+        fetch(`/api/emails/search?subject=${encodeURIComponent(searchTerm)}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Arama sırasında bir hata oluştu');
+                }
+                return response.json();
+            })
+            .then(emails => {
+                const emailList = document.getElementById('emailList');
+                if (!emailList) return;
+
+                emailList.innerHTML = '';
+
+                if (emails.length === 0) {
+                    emailList.innerHTML = '<div class="p-3">Aramanıza uygun e-posta bulunamadı.</div>';
+                    return;
+                }
+
+                emails.forEach(email => {
+                    const div = document.createElement('div');
+                    div.className = `email-item ${email.read ? '' : 'unread'}`;
+                    div.innerHTML = `
+                      <div><strong>${formatEmailAddress(email.from)}</strong></div>
+                      <div>${email.subject || '(Konu yok)'}</div>
+                      <div><small>${formatDate(email.sentDate)}</small></div>
+                      ${email.attachments && email.attachments.length > 0 ?
+                        `<div><small><i class="bi bi-paperclip"></i> ${email.attachments.length} ek</small></div>` : ''}
+                  `;
+                    div.onclick = () => showEmailDetails(email.messageId);
+                    emailList.appendChild(div);
+                });
+            })
+            .catch(error => {
+                console.error('Error searching emails:', error);
+                const emailList = document.getElementById('emailList');
+                if (emailList) {
+                    emailList.innerHTML = '<div class="p-3 text-danger">Arama sırasında hata oluştu.</div>';
+                }
+                showNotification('Arama sırasında hata oluştu: ' + error.message, true);
+            })
+            .finally(() => {
+                const emailListLoader = document.getElementById('emailListLoader');
+                if (emailListLoader) {
+                    emailListLoader.style.display = 'none';
+                }
+                setButtonLoading('searchBtn', false);
+            });
+    });
+
+    // Enter tuşu ile arama
+    document.getElementById('searchInput')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            const searchBtn = document.getElementById('searchBtn');
+            if (searchBtn) searchBtn.click();
+        }
+    });
+
+    // Yenile butonu
+    document.getElementById('refreshBtn')?.addEventListener('click', () => {
+        showFullScreenLoader();
+        loadEmails()
+            .finally(() => {
+                hideFullScreenLoader();
+            });
+    });
+
+    // Yeni e-posta oluşturma butonu
+    document.getElementById('composeBtn')?.addEventListener('click', () => {
+        // Form alanlarını temizle
+        const toInput = document.getElementById('toInput');
+        const ccInput = document.getElementById('ccInput');
+        const subjectInput = document.getElementById('subjectInput');
+        const contentInput = document.getElementById('contentInput');
+        const attachmentsInput = document.getElementById('attachmentsInput');
+        const attachmentsPreview = document.getElementById('attachmentsPreview');
+
+        if (toInput) toInput.value = '';
+        if (ccInput) ccInput.value = '';
+        if (subjectInput) subjectInput.value = '';
+        if (contentInput) contentInput.value = '';
+        if (attachmentsInput) attachmentsInput.value = '';
+        if (attachmentsPreview) attachmentsPreview.innerHTML = '';
+
+        selectedFiles = [];
+
+        if (composeModal) composeModal.show();
+    });
+
+    // Ek dosya seçildiğinde
+    document.getElementById('attachmentsInput')?.addEventListener('change', (e) => {
+        const files = e.target.files;
+        if (files && files.length > 0) {
+            selectedFiles = Array.from(files);
+            updateAttachmentsPreview();
+        }
+    });
+
+    // Yanıt için ek dosya seçildiğinde
+    document.getElementById('replyAttachments')?.addEventListener('change', (e) => {
+        const files = e.target.files;
+        if (files && files.length > 0) {
+            replySelectedFiles = [...replySelectedFiles, ...Array.from(files)];
+            updateReplyAttachmentsPreview();
+        }
+    });
+
+    // Ekleri önizleme listesinde göster
+    function updateAttachmentsPreview() {
+        const previewContainer = document.getElementById('attachmentsPreview');
+        if (!previewContainer) return;
+
+        previewContainer.innerHTML = '';
+
+        selectedFiles.forEach((file, index) => {
+            const attachmentItem = document.createElement('div');
+            attachmentItem.className = 'compose-attachment-item';
+            attachmentItem.innerHTML = `
+        <i class="bi bi-paperclip me-2"></i>
+        <span class="file-name">${file.name}</span>
+        <span class="file-size text-muted ms-2">(${formatFileSize(file.size)})</span>
+        <span class="remove-attachment" data-index="${index}">
+          <i class="bi bi-x-circle"></i>
+        </span>
+      `;
+            previewContainer.appendChild(attachmentItem);
+
+            // Ek kaldırma olayını ekle
+            attachmentItem.querySelector('.remove-attachment')?.addEventListener('click', function () {
+                const fileIndex = parseInt(this.getAttribute('data-index') || '0');
+                selectedFiles.splice(fileIndex, 1);
+                updateAttachmentsPreview();
+            });
+        });
+    }
+
+    // Yanıt ekleri önizleme listesinde göster
+    function updateReplyAttachmentsPreview() {
+        const previewContainer = document.getElementById('replyAttachmentsList');
+        if (!previewContainer) return;
+
+        previewContainer.innerHTML = '';
+
+        replySelectedFiles.forEach((file, index) => {
+            const attachmentItem = document.createElement('div');
+            attachmentItem.className = 'compose-attachment-item';
+            attachmentItem.innerHTML = `
+        <i class="bi bi-paperclip me-2"></i>
+        <span class="file-name">${file.name}</span>
+        <span class="file-size text-muted ms-2">(${formatFileSize(file.size)})</span>
+        <span class="remove-attachment" data-index="${index}">
+          <i class="bi bi-x-circle"></i>
+        </span>
+      `;
+            previewContainer.appendChild(attachmentItem);
+
+            // Ek kaldırma olayını ekle
+            attachmentItem.querySelector('.remove-attachment')?.addEventListener('click', function () {
+                const fileIndex = parseInt(this.getAttribute('data-index') || '0');
+                replySelectedFiles.splice(fileIndex, 1);
+                updateReplyAttachmentsPreview();
+            });
+        });
+    }
+
+    // Dosya boyutu formatla
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // E-posta gönderme
+    document.getElementById('sendEmailBtn')?.addEventListener('click', () => {
+        const toInput = document.getElementById('toInput');
+        const ccInput = document.getElementById('ccInput');
+        const subjectInput = document.getElementById('subjectInput');
+        const contentInput = document.getElementById('contentInput');
+
+        if (!toInput || !subjectInput || !contentInput) return;
+
+        const to = toInput.value.trim();
+        const cc = ccInput?.value.trim();
+        const subject = subjectInput.value.trim();
+        const content = contentInput.value.trim();
+
+        if (!to || !subject || !content) {
+            showNotification('Lütfen gerekli alanları doldurun', true);
+            return;
+        }
+
+        setButtonLoading('sendEmailBtn', true);
+        showFullScreenLoader();
+
+        // FormData oluştur
+        const formData = new FormData();
+        formData.append('to', to);
+        if (cc) formData.append('cc', cc);
+        formData.append('subject', subject);
+        formData.append('content', content);
+
+        // Ekleri ekle
+        selectedFiles.forEach(file => {
+            formData.append('attachments', file);
+        });
+
+        fetch('/api/emails/send', {
+            method: 'POST',
+            body: formData
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('E-posta gönderilirken bir hata oluştu');
+                }
+                return response.json();
+            })
+            .then(() => {
+                showNotification('E-posta başarıyla gönderildi!');
+                if (composeModal) composeModal.hide();
+
+                // Gelen kutusu yenile
+                return loadEmails();
+            })
+            .catch(error => {
+                console.error('Error sending email:', error);
+                showNotification('E-posta gönderilirken bir hata oluştu: ' + error.message, true);
+            })
+            .finally(() => {
+                setButtonLoading('sendEmailBtn', false);
+                hideFullScreenLoader();
+            });
+    });
+
+    // Tümünü yanıtla
+    document.getElementById('replyAllBtn')?.addEventListener('click', () => {
+        if (!currentEmailId) return;
+
+        const replyContent = document.getElementById('replyContent');
+        if (!replyContent) return;
+
+        const content = replyContent.value.trim();
+        if (!content) {
+            showNotification('Lütfen bir yanıt içeriği girin', true);
+            return;
+        }
+
+        setButtonLoading('replyAllBtn', true);
+        showFullScreenLoader();
+
+        // FormData oluştur
+        const formData = new FormData();
+        formData.append('content', content);
+
+        // Ekleri ekle
+        replySelectedFiles.forEach(file => {
+            formData.append('attachments', file);
+        });
+
+        fetch(`/api/emails/${currentEmailId}/reply-all`, {
+            method: 'POST',
+            body: formData
+        })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Yanıt gönderilirken bir hata oluştu');
+                }
+                showNotification('E-posta başarıyla yanıtlandı!');
+
+                const replyContent = document.getElementById('replyContent');
+                const replyAttachmentsList = document.getElementById('replyAttachmentsList');
+
+                if (replyContent) replyContent.value = '';
+                if (replyAttachmentsList) replyAttachmentsList.innerHTML = '';
+
+                replySelectedFiles = [];
+
+                // Yeniden e-postaları yükle
+                return loadEmails();
+            })
+            .catch(error => {
+                console.error('Error replying to email:', error);
+                showNotification('E-posta yanıtlanırken bir hata oluştu: ' + error.message, true);
+            })
+            .finally(() => {
+                setButtonLoading('replyAllBtn', false);
+                hideFullScreenLoader();
+            });
+    });
+
+    // Yardımcı fonksiyonlar
+    function formatDate(dateString) {
+        if (!dateString) return '';
+        const date = new Date(dateString);
+        return date.toLocaleString('tr-TR');
+    }
+
+    function formatEmailAddress(address) {
+        if (!address) return '';
+        // E-posta adresini daha okunabilir hale getir
+        // Örnek: "Ad Soyad <email@example.com>" -> "Ad Soyad"
+        const match = address.match(/^"?([^"<]+)"?\s*<?([^>]*)>?$/);
+        if (match && match[1]) {
+            return match[1].trim();
+        }
+        return address;
+    }
+
+    // Sayfa yüklendiğinde e-postaları yükle
+    document.addEventListener('DOMContentLoaded', () => {
+        // Modal nesnelerini başlat
+        composeModal = new bootstrap.Modal(document.getElementById('composeModal'));
+        attachmentPreviewModal = new bootstrap.Modal(document.getElementById('attachmentPreviewModal'));
+
+        // İlk yükleme sırasında tam ekran yükleme göstergesi
+        showFullScreenLoader();
+
+        // E-postaları yükle
+        loadEmails()
+            .finally(() => {
+                hideFullScreenLoader();
+            });
+    });
+</script>
+</body>
+</html>
