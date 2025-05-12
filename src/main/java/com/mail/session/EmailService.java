@@ -93,7 +93,6 @@ public class EmailService {
             Folder inbox = store.getFolder("INBOX");
             inbox.open(Folder.READ_ONLY);
 
-            // IMAP arama kriteri oluştur: SUBJECT içinde aranan metin
             SearchTerm searchTerm = new SubjectTerm(subject);
             Message[] messages = inbox.search(searchTerm);
 
@@ -228,7 +227,6 @@ public class EmailService {
         email.setSentDate(message.getSentDate());
         email.setRead(message.isSet(Flags.Flag.SEEN));
 
-        // To recipients
         Address[] toAddresses = message.getRecipients(Message.RecipientType.TO);
         if (toAddresses != null) {
             email.setTo(Arrays.stream(toAddresses)
@@ -238,7 +236,6 @@ public class EmailService {
             email.setTo(new ArrayList<>());
         }
 
-        // CC recipients
         Address[] ccAddresses = message.getRecipients(Message.RecipientType.CC);
         if (ccAddresses != null) {
             email.setCc(Arrays.stream(ccAddresses)
@@ -248,7 +245,6 @@ public class EmailService {
             email.setCc(new ArrayList<>());
         }
 
-        // Content ve Attachments
         List<Attachment> attachments = new ArrayList<>();
         StringBuilder contentBuilder = new StringBuilder();
 
