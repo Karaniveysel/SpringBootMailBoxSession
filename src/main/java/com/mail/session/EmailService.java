@@ -1,17 +1,7 @@
 package com.mail.session;
 
 import jakarta.activation.DataHandler;
-import jakarta.mail.Address;
-import jakarta.mail.Authenticator;
-import jakarta.mail.BodyPart;
-import jakarta.mail.Flags;
-import jakarta.mail.Folder;
-import jakarta.mail.Message;
-import jakarta.mail.Multipart;
-import jakarta.mail.PasswordAuthentication;
-import jakarta.mail.Session;
-import jakarta.mail.Store;
-import jakarta.mail.Transport;
+import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeBodyPart;
 import jakarta.mail.internet.MimeMessage;
@@ -46,12 +36,13 @@ public class EmailService {
         properties.put("mail.imaps.host", "imap.gmail.com");
         properties.put("mail.imaps.port", "993");
         properties.put("mail.imaps.starttls.enable", "true");
+        properties.put("mail.imaps.partialfetch", "false");
         properties.put("mail.smtp.auth", "true");
         properties.put("mail.smtp.host", "smtp.gmail.com");
         properties.put("mail.smtp.port", "587");
         properties.put("mail.smtp.starttls.enable", "true");
 
-        return Session.getInstance(properties, new Authenticator() {
+        return Session.getDefaultInstance(properties, new Authenticator() {
             @Override
             protected PasswordAuthentication getPasswordAuthentication() {
                 return new PasswordAuthentication(username, password);
@@ -68,6 +59,13 @@ public class EmailService {
 
             Folder inbox = store.getFolder("INBOX");
             inbox.open(Folder.READ_ONLY);
+            Message[] msgs = inbox.getMessages();
+
+            FetchProfile fp = new FetchProfile();
+            fp.add(FetchProfile.Item.ENVELOPE);
+            fp.add(FetchProfile.Item.FLAGS);
+            fp.add("Message-ID");
+            inbox.fetch(msgs, fp);
 
             Message[] messages = inbox.getMessages();
             for (Message message : messages) {
@@ -121,7 +119,7 @@ public class EmailService {
             Message[] messages = inbox.getMessages();
             for (Message message : messages) {
                 if (message.getHeader("Message-ID")[0].equals(messageId)) {
-                    EmailMessage email = convertToEmailMessage(message);
+                    EmailMessage email = convertToEmailMessageWithAttachments(message);
                     inbox.close(false);
                     store.close();
                     return email;
@@ -220,30 +218,12 @@ public class EmailService {
     }
 
     private EmailMessage convertToEmailMessage(Message message) throws Exception {
-        EmailMessage email = new EmailMessage();
-        email.setMessageId(message.getHeader("Message-ID")[0]);
-        email.setSubject(message.getSubject());
-        email.setFrom(((InternetAddress) message.getFrom()[0]).getAddress());
-        email.setSentDate(message.getSentDate());
-        email.setRead(message.isSet(Flags.Flag.SEEN));
+        return emailToEmailMessage(message);
+    }
 
-        Address[] toAddresses = message.getRecipients(Message.RecipientType.TO);
-        if (toAddresses != null) {
-            email.setTo(Arrays.stream(toAddresses)
-                    .map(address -> ((InternetAddress) address).getAddress())
-                    .collect(Collectors.toList()));
-        } else {
-            email.setTo(new ArrayList<>());
-        }
+    private EmailMessage convertToEmailMessageWithAttachments(Message message) throws Exception {
 
-        Address[] ccAddresses = message.getRecipients(Message.RecipientType.CC);
-        if (ccAddresses != null) {
-            email.setCc(Arrays.stream(ccAddresses)
-                    .map(address -> ((InternetAddress) address).getAddress())
-                    .collect(Collectors.toList()));
-        } else {
-            email.setCc(new ArrayList<>());
-        }
+        EmailMessage email = emailToEmailMessage(message);
 
         List<Attachment> attachments = new ArrayList<>();
         StringBuilder contentBuilder = new StringBuilder();
@@ -284,4 +264,35 @@ public class EmailService {
         email.setAttachments(attachments);
         return email;
     }
+
+    private EmailMessage emailToEmailMessage(Message message) throws MessagingException {
+        EmailMessage email = new EmailMessage();
+        email.setMessageId(message.getHeader("Message-ID")[0]);
+        email.setSubject(message.getSubject());
+        email.setFrom(((InternetAddress) message.getFrom()[0]).getAddress());
+        email.setSentDate(message.getSentDate());
+        email.setRead(message.isSet(Flags.Flag.SEEN));
+
+        Address[] toAddresses = message.getRecipients(Message.RecipientType.TO);
+        if (toAddresses != null) {
+            email.setTo(Arrays.stream(toAddresses)
+                    .map(address -> ((InternetAddress) address).getAddress())
+                    .collect(Collectors.toList()));
+        } else {
+            email.setTo(new ArrayList<>());
+        }
+
+        Address[] ccAddresses = message.getRecipients(Message.RecipientType.CC);
+        if (ccAddresses != null) {
+            email.setCc(Arrays.stream(ccAddresses)
+                    .map(address -> ((InternetAddress) address).getAddress())
+                    .collect(Collectors.toList()));
+        } else {
+            email.setCc(new ArrayList<>());
+        }
+
+        return email;
+
+    }
+
 }
