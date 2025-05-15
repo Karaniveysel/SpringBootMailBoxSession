@@ -1,24 +1,26 @@
 package com.mail.session;
 
 import jakarta.activation.DataHandler;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import jakarta.mail.*;
 import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeBodyPart;
 import jakarta.mail.internet.MimeMessage;
 import jakarta.mail.internet.MimeMultipart;
+import jakarta.mail.search.MessageIDTerm;
 import jakarta.mail.search.SearchTerm;
 import jakarta.mail.search.SubjectTerm;
 import jakarta.mail.util.ByteArrayDataSource;
+import lombok.SneakyThrows;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Properties;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -30,191 +32,271 @@ public class EmailService {
     @Value("${gmail.password}")
     private String password;
 
-    private Session getEmailSession() {
-        Properties properties = new Properties();
-        properties.put("mail.store.protocol", "imaps");
-        properties.put("mail.imaps.host", "imap.gmail.com");
-        properties.put("mail.imaps.port", "993");
-        properties.put("mail.imaps.starttls.enable", "true");
-        properties.put("mail.imaps.partialfetch", "false");
-        properties.put("mail.smtp.auth", "true");
-        properties.put("mail.smtp.host", "smtp.gmail.com");
-        properties.put("mail.smtp.port", "587");
-        properties.put("mail.smtp.starttls.enable", "true");
+    private Session session;
+    private Store store;
+    private Transport transport;
 
-        return Session.getDefaultInstance(properties, new Authenticator() {
+    @PostConstruct
+    public void init() throws MessagingException {
+        Properties props = new Properties();
+        props.put("mail.store.protocol", "imaps");
+        props.put("mail.imaps.host", "imap.gmail.com");
+        props.put("mail.imaps.port", "993");
+        props.put("mail.imaps.starttls.enable", "true");
+        props.put("mail.imaps.partialfetch", "true");
+        props.put("mail.smtp.auth", "true");
+        props.put("mail.smtp.host", "smtp.gmail.com");
+        props.put("mail.smtp.port", "587");
+        props.put("mail.smtp.starttls.enable", "true");
+
+        session = Session.getDefaultInstance(props, new Authenticator() {
             @Override
             protected PasswordAuthentication getPasswordAuthentication() {
                 return new PasswordAuthentication(username, password);
             }
         });
+
+        store = session.getStore("imaps");
+        store.connect(username, password);
+        transport = session.getTransport("smtp");
+        transport.connect(username, password);
     }
 
-    public List<EmailMessage> getAllEmails() {
-        List<EmailMessage> emails = new ArrayList<>();
-        try {
-            Session session = getEmailSession();
-            Store store = session.getStore("imaps");
-            store.connect("imap.gmail.com", username, password);
+    private synchronized void ensureStoreConnected() throws MessagingException {
+        if (store == null || !store.isConnected()) {
+            store = session.getStore("imaps");
+            store.connect(username, password);
+        }
+    }
 
-            Folder inbox = store.getFolder("INBOX");
-            inbox.open(Folder.READ_ONLY);
-            Message[] msgs = inbox.getMessages();
+    private synchronized void ensureTransportConnected() throws MessagingException {
+        if (transport == null || !transport.isConnected()) {
+            transport = session.getTransport("smtp");
+            transport.connect(username, password);
+        }
+    }
+
+    private synchronized void ensureConnections() throws MessagingException {
+        ensureStoreConnected();
+        ensureTransportConnected();
+    }
+
+    @SneakyThrows
+    public synchronized EmailMessage getEmailById(String messageId, BoxType boxType) {
+        ensureConnections();
+        Folder mailBox = null;
+        try {
+            mailBox = getFolder(boxType);
+
+            Message[] found = mailBox.search(new MessageIDTerm(messageId));
+            if (found.length == 0) {
+                return null;
+            }
+
+            FetchProfile fp = new FetchProfile();
+            fp.add(FetchProfile.Item.ENVELOPE);
+            mailBox.fetch(found, fp);
+
+            return convertToEmailMessageWithAttachments(found[0]);
+
+        } catch (MessagingException | IOException e) {
+            throw new RuntimeException("E-posta alınırken hata oluştu", e);
+        } finally {
+            if (mailBox != null && mailBox.isOpen()) {
+                try { mailBox.close(false); }
+                catch (MessagingException ignored) {}
+            }
+        }
+    }
+
+    @PreDestroy
+    public void cleanup() {
+        if (store != null && store.isConnected()) {
+            try { store.close(); }
+            catch (MessagingException ignored) {}
+        }
+    }
+
+    private Folder getFolder(BoxType boxType) throws MessagingException {
+        Folder mailBox;
+        if (boxType == BoxType.INBOX) {
+            mailBox = store.getFolder("INBOX");
+            mailBox.open(Folder.READ_ONLY);
+        } else if (boxType == BoxType.SENT) {
+            mailBox = store.getFolder("[Gmail]/Sent Mail");
+            if (!mailBox.exists()) {
+                mailBox = store.getFolder("Sent");
+            }
+        } else {
+            throw new RuntimeException("Unsupported box type " + boxType);
+        }
+        return mailBox;
+    }
+
+    @SneakyThrows
+    public synchronized List<EmailMessage> getAllEmails(BoxType boxType) {
+        ensureConnections();
+        List<EmailMessage> emails = new ArrayList<>();
+        Folder mailBox = null;
+
+        try {
+
+            mailBox = getFolder(boxType);
+
+            Message[] msgs = mailBox.getMessages();
+            if (msgs.length == 0) {
+                return emails;
+            }
 
             FetchProfile fp = new FetchProfile();
             fp.add(FetchProfile.Item.ENVELOPE);
             fp.add(FetchProfile.Item.FLAGS);
             fp.add("Message-ID");
-            inbox.fetch(msgs, fp);
+            mailBox.fetch(msgs, fp);
 
-            Message[] messages = inbox.getMessages();
-            for (Message message : messages) {
-                EmailMessage email = convertToEmailMessage(message);
-                emails.add(email);
+            for (Message msg : msgs) {
+                emails.add(convertToEmailMessage(msg));
             }
 
-            inbox.close(false);
-            store.close();
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (MessagingException | IOException e) {
+            throw new RuntimeException("Tüm e-postalar alınırken hata oluştu", e);
+        } finally {
+            if (mailBox != null && mailBox.isOpen()) {
+                try { mailBox.close(false); }
+                catch (MessagingException ignored) {}
+            }
         }
+
         return emails;
     }
 
-    public List<EmailMessage> searchEmailsBySubject(String subject) {
+    @SneakyThrows
+    public synchronized List<EmailMessage> searchEmailsBySubject(String subject, BoxType boxType) {
+        ensureConnections();
         List<EmailMessage> emails = new ArrayList<>();
+        Folder mailBox = null;
+
         try {
-            Session session = getEmailSession();
-            Store store = session.getStore("imaps");
-            store.connect("imap.gmail.com", username, password);
+            mailBox = getFolder(boxType);
 
-            Folder inbox = store.getFolder("INBOX");
-            inbox.open(Folder.READ_ONLY);
-
-            SearchTerm searchTerm = new SubjectTerm(subject);
-            Message[] messages = inbox.search(searchTerm);
-
-            for (Message message : messages) {
-                EmailMessage email = convertToEmailMessage(message);
-                emails.add(email);
+            SearchTerm term = new SubjectTerm(subject);
+            Message[] found = mailBox.search(term);
+            if (found.length == 0) {
+                return emails;
             }
 
-            inbox.close(false);
-            store.close();
-        } catch (Exception e) {
-            e.printStackTrace();
+            FetchProfile fp = new FetchProfile();
+            fp.add(FetchProfile.Item.ENVELOPE);
+            mailBox.fetch(found, fp);
+
+            for (Message msg : found) {
+                emails.add(convertToEmailMessage(msg));
+            }
+
+        } catch (MessagingException | IOException e) {
+            throw new RuntimeException("E-posta araması sırasında hata oluştu", e);
+        } finally {
+            if (mailBox != null && mailBox.isOpen()) {
+                try { mailBox.close(false); }
+                catch (MessagingException ignored) {}
+            }
         }
+
         return emails;
     }
 
-    public EmailMessage getEmailById(String messageId) {
-        try {
-            Session session = getEmailSession();
-            Store store = session.getStore("imaps");
-            store.connect("imap.gmail.com", username, password);
+    public void sendEmail(
+            String to,
+            String cc,
+            String subject,
+            String content,
+            List<MultipartFile> attachments
+    ) throws MessagingException, IOException {
 
-            Folder inbox = store.getFolder("INBOX");
-            inbox.open(Folder.READ_ONLY);
+        ensureConnections();
+        MimeMessage msg = new MimeMessage(session);
+        msg.setFrom(new InternetAddress(username));
 
-            Message[] messages = inbox.getMessages();
-            for (Message message : messages) {
-                if (message.getHeader("Message-ID")[0].equals(messageId)) {
-                    EmailMessage email = convertToEmailMessageWithAttachments(message);
-                    inbox.close(false);
-                    store.close();
-                    return email;
-                }
-            }
+        InternetAddress[] toAddress = InternetAddress.parse(to, false);
+        msg.setRecipients(Message.RecipientType.TO, toAddress);
 
-            inbox.close(false);
-            store.close();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-    public void sendEmail(String to, String cc, String subject, String content, List<MultipartFile> attachments) throws Exception {
-        Session session = getEmailSession();
-
-        MimeMessage message = new MimeMessage(session);
-        message.setFrom(new InternetAddress(username));
-
-        String[] toAddresses = to.split(",");
-        InternetAddress[] toAddressArray = new InternetAddress[toAddresses.length];
-        for (int i = 0; i < toAddresses.length; i++) {
-            toAddressArray[i] = new InternetAddress(toAddresses[i].trim());
-        }
-        message.setRecipients(Message.RecipientType.TO, toAddressArray);
-
-        if (cc != null && !cc.isEmpty()) {
-            String[] ccAddresses = cc.split(",");
-            InternetAddress[] ccAddressArray = new InternetAddress[ccAddresses.length];
-            for (int i = 0; i < ccAddresses.length; i++) {
-                ccAddressArray[i] = new InternetAddress(ccAddresses[i].trim());
-            }
-            message.setRecipients(Message.RecipientType.CC, ccAddressArray);
+        if (cc != null && !cc.isBlank()) {
+            InternetAddress[] ccAddress = InternetAddress.parse(cc, false);
+            msg.setRecipients(Message.RecipientType.CC, ccAddress);
         }
 
-        message.setSubject(subject);
+        msg.setSubject(subject, "UTF-8");
 
         Multipart multipart = new MimeMultipart();
 
-        MimeBodyPart contentPart = new MimeBodyPart();
-        contentPart.setContent(content, "text/html; charset=utf-8");
-        multipart.addBodyPart(contentPart);
+        MimeBodyPart bodyPart = new MimeBodyPart();
+        bodyPart.setContent(content, "text/html; charset=UTF-8");
+        multipart.addBodyPart(bodyPart);
 
-        if (attachments != null && !attachments.isEmpty()) {
+        if (attachments != null) {
             for (MultipartFile file : attachments) {
-                MimeBodyPart attachmentPart = new MimeBodyPart();
-                attachmentPart.setDataHandler(new DataHandler(new ByteArrayDataSource(file.getInputStream(), file.getContentType())));
-                attachmentPart.setFileName(file.getOriginalFilename());
-                multipart.addBodyPart(attachmentPart);
+                MimeBodyPart attachPart = new MimeBodyPart();
+                attachPart.setFileName(file.getOriginalFilename());
+                attachPart.setDataHandler(new DataHandler(
+                        new ByteArrayDataSource(file.getInputStream(), file.getContentType())
+                ));
+                multipart.addBodyPart(attachPart);
             }
         }
 
-        message.setContent(multipart);
+        msg.setContent(multipart);
+        msg.setSentDate(new java.util.Date());
 
-        Transport.send(message);
+        transport.sendMessage(msg, msg.getAllRecipients());
     }
 
 
-    public void replyAll(String messageId, String content, List<MultipartFile> attachments) throws Exception {
-        Session session = getEmailSession();
-        Store store = session.getStore("imaps");
-        store.connect("imap.gmail.com", username, password);
+    public synchronized void replyAll(
+            String messageId,
+            String content,
+            BoxType boxType,
+            List<MultipartFile> attachments
+    ) throws MessagingException, IOException {
+        ensureConnections();
+        Folder mailBox = null;
+        try {
+            mailBox = getFolder(boxType);
 
-        Folder inbox = store.getFolder("INBOX");
-        inbox.open(Folder.READ_ONLY);
+            Message[] found = mailBox.search(new MessageIDTerm(messageId));
+            if (found.length == 0) {
+                return;
+            }
 
-        Message[] messages = inbox.getMessages();
-        for (Message message : messages) {
-            if (message.getHeader("Message-ID")[0].equals(messageId)) {
-                Message replyMessage = message.reply(true);
+            MimeMessage original = (MimeMessage) found[0];
+            MimeMessage reply = (MimeMessage) original.reply(true);
+            reply.setFrom(new InternetAddress(username));
+            reply.setSentDate(new Date());
 
-                Multipart multipart = new MimeMultipart();
+            Multipart multipart = new MimeMultipart();
 
-                MimeBodyPart contentPart = new MimeBodyPart();
-                contentPart.setContent(content, "text/html; charset=utf-8");
-                multipart.addBodyPart(contentPart);
+            MimeBodyPart bodyPart = new MimeBodyPart();
+            bodyPart.setContent(content, "text/html; charset=UTF-8");
+            multipart.addBodyPart(bodyPart);
 
-                if (attachments != null && !attachments.isEmpty()) {
-                    for (MultipartFile file : attachments) {
-                        MimeBodyPart attachmentPart = new MimeBodyPart();
-                        attachmentPart.setDataHandler(new DataHandler(new ByteArrayDataSource(file.getInputStream(), file.getContentType())));
-                        attachmentPart.setFileName(file.getOriginalFilename());
-                        multipart.addBodyPart(attachmentPart);
-                    }
+            if (attachments != null) {
+                for (MultipartFile file : attachments) {
+                    MimeBodyPart attachPart = new MimeBodyPart();
+                    attachPart.setDataHandler(new DataHandler(
+                            new ByteArrayDataSource(file.getInputStream(), file.getContentType())
+                    ));
+                    attachPart.setFileName(file.getOriginalFilename());
+                    multipart.addBodyPart(attachPart);
                 }
+            }
+            reply.setContent(multipart);
 
-                replyMessage.setContent(multipart);
-                Transport.send(replyMessage);
-                break;
+            transport.sendMessage(reply, reply.getAllRecipients());
+        } finally {
+            if (mailBox != null && mailBox.isOpen()) {
+                try { mailBox.close(false); }
+                catch (MessagingException ignored) {}
             }
         }
-
-        inbox.close(false);
-        store.close();
     }
 
     private EmailMessage convertToEmailMessage(Message message) throws Exception {
@@ -231,8 +313,7 @@ public class EmailService {
         Object content = message.getContent();
         if (content instanceof String) {
             email.setContent((String) content);
-        } else if (content instanceof Multipart) {
-            Multipart multipart = (Multipart) content;
+        } else if (content instanceof Multipart multipart) {
 
             for (int i = 0; i < multipart.getCount(); i++) {
                 BodyPart bodyPart = multipart.getBodyPart(i);
@@ -241,19 +322,7 @@ public class EmailService {
                 if (contentType.contains("text/plain") || contentType.contains("text/html")) {
                     contentBuilder.append(bodyPart.getContent().toString());
                 } else if (!contentType.contains("text/html")) {
-                    Attachment attachment = new Attachment();
-                    attachment.setFileName(bodyPart.getFileName());
-                    attachment.setContentType(bodyPart.getContentType());
-
-                    InputStream is = bodyPart.getInputStream();
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    byte[] buffer = new byte[4096];
-                    int bytesRead;
-                    while ((bytesRead = is.read(buffer)) != -1) {
-                        baos.write(buffer, 0, bytesRead);
-                    }
-                    attachment.setContent(baos.toByteArray());
-
+                    Attachment attachment = getAttachment(bodyPart);
                     attachments.add(attachment);
                 }
             }
@@ -263,6 +332,22 @@ public class EmailService {
 
         email.setAttachments(attachments);
         return email;
+    }
+
+    private Attachment getAttachment(BodyPart bodyPart) throws MessagingException, IOException {
+        Attachment attachment = new Attachment();
+        attachment.setFileName(bodyPart.getFileName());
+        attachment.setContentType(bodyPart.getContentType());
+
+        InputStream is = bodyPart.getInputStream();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        int bytesRead;
+        while ((bytesRead = is.read(buffer)) != -1) {
+            baos.write(buffer, 0, bytesRead);
+        }
+        attachment.setContent(baos.toByteArray());
+        return attachment;
     }
 
     private EmailMessage emailToEmailMessage(Message message) throws MessagingException {
@@ -292,7 +377,6 @@ public class EmailService {
         }
 
         return email;
-
     }
 
 }

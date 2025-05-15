@@ -391,7 +391,7 @@
 
         setButtonLoading('refreshBtn', true);
 
-        return fetch('/api/emails')
+        return fetch('/api/emails/INBOX')
             .then(response => {
                 if (!response.ok) {
                     throw new Error('E-postalar yüklenirken bir hata oluştu');
@@ -461,7 +461,7 @@
             item.style.opacity = '0.7';
         });
 
-        fetch(`/api/emails/${messageId}`)
+        fetch(`/api/emails/INBOX/${messageId}`)
             .then(response => {
                 if (!response.ok) {
                     throw new Error('E-posta detayları yüklenirken bir hata oluştu');
@@ -516,7 +516,7 @@
                         <button type="button" class="btn btn-outline-secondary preview-btn" data-filename="${attachment.fileName}">
                           <i class="bi bi-eye"></i>
                         </button>
-                      <a href="/api/emails/${messageId}/attachments/${attachment.fileName}" class="btn btn-outline-primary" download="${attachment.fileName}">
+                      <a href="/api/emails/INBOX/${messageId}/attachments/${attachment.fileName}" class="btn btn-outline-primary" download="${attachment.fileName}">
                         <i class="bi bi-download"></i>
                       </a>
                       </div>
@@ -590,7 +590,7 @@
         previewContent.innerHTML = '<div class="loader"></div>';
 
         attachmentPreviewModalLabel.textContent = attachment.fileName;
-        downloadAttachmentBtn.href = `/api/emails/${messageId}/attachments/${attachment.fileName}`;
+        downloadAttachmentBtn.href = `/api/emails/INBOX/${messageId}/attachments/${attachment.fileName}`;
 
         attachmentPreviewModal.show();
 
@@ -598,7 +598,7 @@
         if (attachment.contentType && attachment.contentType.includes('image')) {
             const img = document.createElement('img');
             img.className = 'img-fluid attachment-preview';
-            img.src = `/api/emails/${messageId}/attachments/${attachment.fileName}`;
+            img.src = `/api/emails/INBOX/${messageId}/attachments/${attachment.fileName}`;
             img.alt = attachment.fileName;
 
             img.onload = () => {
@@ -612,7 +612,7 @@
         } else if (attachment.contentType && attachment.contentType.includes('pdf')) {
             previewContent.innerHTML = `
         <div class="ratio ratio-16x9">
-          <iframe src="/api/emails/${messageId}/attachments/${attachment.fileName}" allowfullscreen></iframe>
+          <iframe src="/api/emails/INBOX/${messageId}/attachments/${attachment.fileName}" allowfullscreen></iframe>
         </div>
       `;
         } else {
@@ -642,7 +642,7 @@
 
         setButtonLoading('searchBtn', true);
 
-        fetch(`/api/emails/search?subject=${encodeURIComponent(searchTerm)}`)
+        fetch(`/api/emails/search/INBOX?subject=${encodeURIComponent(searchTerm)}`)
             .then(response => {
                 if (!response.ok) {
                     throw new Error('Arama sırasında bir hata oluştu');
@@ -901,7 +901,7 @@
             formData.append('attachments', file);
         });
 
-        fetch(`/api/emails/${currentEmailId}/reply-all`, {
+        fetch(`/api/emails/INBOX/${currentEmailId}/reply-all`, {
             method: 'POST',
             body: formData
         })
