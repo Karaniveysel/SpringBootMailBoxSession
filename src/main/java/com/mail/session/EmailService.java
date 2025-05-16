@@ -12,7 +12,7 @@ import jakarta.mail.search.MessageIDTerm;
 import jakarta.mail.search.SearchTerm;
 import jakarta.mail.search.SubjectTerm;
 import jakarta.mail.util.ByteArrayDataSource;
-import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -23,6 +23,7 @@ import java.io.InputStream;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 public class EmailService {
 
@@ -62,30 +63,37 @@ public class EmailService {
         transport.connect(username, password);
     }
 
-    private synchronized void ensureStoreConnected() throws MessagingException {
+    @PreDestroy
+    public void cleanup() {
+        if (store != null && store.isConnected()) {
+            try { store.close(); }
+            catch (MessagingException ignored) {}
+        }
+    }
+
+    private void ensureStoreConnected() throws MessagingException {
         if (store == null || !store.isConnected()) {
             store = session.getStore("imaps");
             store.connect(username, password);
         }
     }
 
-    private synchronized void ensureTransportConnected() throws MessagingException {
+    private void ensureTransportConnected() throws MessagingException {
         if (transport == null || !transport.isConnected()) {
             transport = session.getTransport("smtp");
             transport.connect(username, password);
         }
     }
 
-    private synchronized void ensureConnections() throws MessagingException {
+    private void ensureConnections() throws MessagingException {
         ensureStoreConnected();
         ensureTransportConnected();
     }
 
-    @SneakyThrows
-    public synchronized EmailMessage getEmailById(String messageId, BoxType boxType) {
-        ensureConnections();
+    public EmailMessage getEmailById(String messageId, BoxType boxType) {
         Folder mailBox = null;
         try {
+            ensureConnections();
             mailBox = getFolder(boxType);
 
             Message[] found = mailBox.search(new MessageIDTerm(messageId));
@@ -100,20 +108,13 @@ public class EmailService {
             return convertToEmailMessageWithAttachments(found[0]);
 
         } catch (MessagingException | IOException e) {
-            throw new RuntimeException("E-posta alınırken hata oluştu", e);
+            log.error(e.getMessage(), e);
+            throw new RuntimeException(e);
         } finally {
             if (mailBox != null && mailBox.isOpen()) {
                 try { mailBox.close(false); }
                 catch (MessagingException ignored) {}
             }
-        }
-    }
-
-    @PreDestroy
-    public void cleanup() {
-        if (store != null && store.isConnected()) {
-            try { store.close(); }
-            catch (MessagingException ignored) {}
         }
     }
 
@@ -128,23 +129,23 @@ public class EmailService {
                 mailBox = store.getFolder("Sent");
             }
         } else {
-            throw new RuntimeException("Unsupported box type " + boxType);
+            throw new RuntimeException("Box not found");
         }
         return mailBox;
     }
 
-    @SneakyThrows
-    public synchronized List<EmailMessage> getAllEmails(BoxType boxType) {
-        ensureConnections();
+    public List<EmailMessage> getAllEmails(BoxType boxType) {
+
         List<EmailMessage> emails = new ArrayList<>();
         Folder mailBox = null;
 
         try {
 
+            ensureConnections();
             mailBox = getFolder(boxType);
 
-            Message[] msgs = mailBox.getMessages();
-            if (msgs.length == 0) {
+            Message[] messages = mailBox.getMessages();
+            if (messages.length == 0) {
                 return emails;
             }
 
@@ -152,14 +153,15 @@ public class EmailService {
             fp.add(FetchProfile.Item.ENVELOPE);
             fp.add(FetchProfile.Item.FLAGS);
             fp.add("Message-ID");
-            mailBox.fetch(msgs, fp);
+            mailBox.fetch(messages, fp);
 
-            for (Message msg : msgs) {
+            for (Message msg : messages) {
                 emails.add(convertToEmailMessage(msg));
             }
 
-        } catch (MessagingException | IOException e) {
-            throw new RuntimeException("Tüm e-postalar alınırken hata oluştu", e);
+        } catch (MessagingException e) {
+            log.error(e.getMessage(), e);
+            throw new RuntimeException(e);
         } finally {
             if (mailBox != null && mailBox.isOpen()) {
                 try { mailBox.close(false); }
@@ -170,13 +172,12 @@ public class EmailService {
         return emails;
     }
 
-    @SneakyThrows
-    public synchronized List<EmailMessage> searchEmailsBySubject(String subject, BoxType boxType) {
-        ensureConnections();
+    public List<EmailMessage> searchEmailsBySubject(String subject, BoxType boxType) {
         List<EmailMessage> emails = new ArrayList<>();
         Folder mailBox = null;
 
         try {
+            ensureConnections();
             mailBox = getFolder(boxType);
 
             SearchTerm term = new SubjectTerm(subject);
@@ -193,8 +194,9 @@ public class EmailService {
                 emails.add(convertToEmailMessage(msg));
             }
 
-        } catch (MessagingException | IOException e) {
-            throw new RuntimeException("E-posta araması sırasında hata oluştu", e);
+        } catch (MessagingException e) {
+            log.error(e.getMessage(), e);
+            throw new RuntimeException(e);
         } finally {
             if (mailBox != null && mailBox.isOpen()) {
                 try { mailBox.close(false); }
@@ -251,7 +253,7 @@ public class EmailService {
     }
 
 
-    public synchronized void replyAll(
+    public void replyAll(
             String messageId,
             String content,
             BoxType boxType,
@@ -299,11 +301,16 @@ public class EmailService {
         }
     }
 
-    private EmailMessage convertToEmailMessage(Message message) throws Exception {
-        return emailToEmailMessage(message);
+    private EmailMessage convertToEmailMessage(Message message) {
+        try {
+            return emailToEmailMessage(message);
+        } catch (MessagingException e) {
+            log.error(e.getMessage(), e);
+            throw new RuntimeException(e);
+        }
     }
 
-    private EmailMessage convertToEmailMessageWithAttachments(Message message) throws Exception {
+    private EmailMessage convertToEmailMessageWithAttachments(Message message) throws MessagingException, IOException {
 
         EmailMessage email = emailToEmailMessage(message);
 
